@@ -693,30 +693,36 @@ async function addWeek() {
   }
 
   btn.disabled = true; btn.textContent = 'Saving…';
+  msgEl.className = 'add-wk-msg ok';
+  msgEl.textContent = '⏳ Saving week — please wait…';
 
   try {
-    const url  = `${APPS_SCRIPT_URL}?action=saveWeekConfig&weekOf=${weekOf}&closeDate=${closeDate}`;
-    const res  = await fetch(url);
+    const url = `${APPS_SCRIPT_URL}?action=saveWeekConfig&weekOf=${weekOf}&closeDate=${closeDate}`;
+    await submitViaIframe(url);
+
+    // Re-fetch the list to confirm it was saved
+    const res  = await fetch(APPS_SCRIPT_URL + '?action=getWeekConfig');
     const json = await res.json();
 
     if (json.success) {
-      msgEl.className = 'add-wk-msg ok';
-      msgEl.textContent = '✅ ' + json.message;
-      document.getElementById('aw-close').value = '';
-      // Reload the list
-      const res2  = await fetch(APPS_SCRIPT_URL + '?action=getWeekConfig');
-      const json2 = await res2.json();
-      if (json2.success) { weekConfigData = json2.data || []; renderWeekList(); }
-    } else {
-      msgEl.className = 'add-wk-msg err';
-      msgEl.textContent = '❌ ' + (json.error || 'Failed to save.');
+      weekConfigData = json.data || [];
+      renderWeekList();
+      const confirmed = weekConfigData.find(w => w.weekOf === weekOf);
+      if (confirmed) {
+        msgEl.className = 'add-wk-msg ok';
+        msgEl.textContent = '✅ Week added successfully.';
+        document.getElementById('aw-close').value = '';
+      } else {
+        msgEl.className = 'add-wk-msg err';
+        msgEl.textContent = '⚠ Could not confirm the week was saved. Check your Google Sheet directly.';
+      }
     }
   } catch (err) {
     msgEl.className = 'add-wk-msg err';
     msgEl.textContent = '❌ Network error: ' + err.message;
   } finally {
     btn.disabled = false; btn.textContent = 'Add Week';
-    setTimeout(() => { msgEl.className = 'add-wk-msg'; }, 5000);
+    setTimeout(() => { msgEl.className = 'add-wk-msg'; }, 6000);
   }
 }
 
@@ -724,14 +730,15 @@ async function deleteWeek(weekOf, rangeLabel) {
   if (!confirm(`Remove the week of ${rangeLabel} from the schedule?\n\nEmployees will no longer see this week on the form. Existing submissions are not deleted.`)) return;
 
   try {
-    const res  = await fetch(`${APPS_SCRIPT_URL}?action=deleteWeekConfig&weekOf=${weekOf}`);
+    const url = `${APPS_SCRIPT_URL}?action=deleteWeekConfig&weekOf=${weekOf}`;
+    await submitViaIframe(url);
+
+    // Re-fetch to confirm removal and refresh the list
+    const res  = await fetch(APPS_SCRIPT_URL + '?action=getWeekConfig');
     const json = await res.json();
     if (json.success) {
-      const res2  = await fetch(APPS_SCRIPT_URL + '?action=getWeekConfig');
-      const json2 = await res2.json();
-      if (json2.success) { weekConfigData = json2.data || []; renderWeekList(); }
-    } else {
-      alert('Could not remove week: ' + (json.error || 'Unknown error'));
+      weekConfigData = json.data || [];
+      renderWeekList();
     }
   } catch (err) {
     alert('Network error: ' + err.message);
@@ -751,6 +758,39 @@ function fmt12(t) {
 }
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function submitViaIframe(fullUrl) {
+  return new Promise((resolve) => {
+    const [base, queryStr] = fullUrl.split('?');
+    const params = new URLSearchParams(queryStr);
+    const iframeName = 'gs-frame-' + Date.now();
+
+    const iframe = document.createElement('iframe');
+    iframe.name = iframeName;
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+
+    const form = document.createElement('form');
+    form.method = 'GET';
+    form.action = base;
+    form.target = iframeName;
+
+    params.forEach((value, key) => {
+      const inp = document.createElement('input');
+      inp.type = 'hidden'; inp.name = key; inp.value = value;
+      form.appendChild(inp);
+    });
+
+    document.body.appendChild(form);
+    form.submit();
+
+    // Wait 3s for the request to reach the server, then clean up
+    setTimeout(() => {
+      try { document.body.removeChild(form);   } catch(e) {}
+      try { document.body.removeChild(iframe); } catch(e) {}
+      resolve();
+    }, 3000);
+  });
 }
 function showErr(msg) { const el = document.getElementById('errBanner'); el.textContent = msg; el.classList.add('show'); }
 function hideErr()    { document.getElementById('errBanner').classList.remove('show'); }
